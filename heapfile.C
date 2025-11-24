@@ -289,16 +289,73 @@ const Status HeapFileScan::scanNext(RID& outRid)
     int 	nextPageNo;
     Record      rec;
 
-    
-	
-	
-	
-	
-	
-	
-	
-	
-	
+    // If curPage is NULL, this is the first call so read the first page
+    if (curPage == NULL) {
+        status = bufMgr->readPage(filePtr, headerPage->firstPage, curPage);
+        if (status != OK){
+            return status;
+        }
+        curPageNo = headerPage->firstPage;
+        curDirtyFlag = false;
+        curRec = NULLRID;  // Start from beginning of page
+    }
+
+    // Loop through pages and records until we find a match or reach EOF
+    while (true) {
+
+        // Check if we are at the start of the page
+        if (curRec.pageNo == -1) {
+            // At the start of the page
+            status = curPage->firstRecord(nextRid);
+        } else {
+            // In the middle of the page
+            status = curPage->nextRecord(curRec, nextRid);
+        }
+
+        // Check if we got a record or if we reached the end of the page
+        if (status == OK) {
+            // Retrieve the record's data and check if it matches the filter
+            status = curPage->getRecord(nextRid, rec);
+            if (status != OK) return status;
+            
+            // Check if the record matches the filter
+            if (matchRec(rec)) {
+                // This record matches the filter so return it
+                curRec = nextRid;
+                outRid = nextRid;
+                return OK;
+            }
+            
+            // This record doesn't match the filter so update curRec and continue loop
+            curRec = nextRid;
+        }
+        else if (status == ENDOFPAGE || status == NORECORDS) {
+            // Reached end of current page
+            status = curPage->getNextPage(nextPageNo);
+            if (status != OK) return status;
+            
+            // Check if there is a next page
+            if (nextPageNo == -1) {
+                // Reached end of file
+                return FILEEOF;
+            }
+            
+            // Unpin the current page and read the next page
+            status = bufMgr->unPinPage(filePtr, curPageNo, curDirtyFlag);
+            if (status != OK) return status;
+            
+            status = bufMgr->readPage(filePtr, nextPageNo, curPage);
+            if (status != OK) return status;
+            
+            curPageNo = nextPageNo;
+            curDirtyFlag = false;
+            curRec = NULLRID;  // Start from the beginning of the new page
+        }
+        else {
+            // Some other error occurred so return the error
+            return status;
+        }
+    }
 }
 
 
