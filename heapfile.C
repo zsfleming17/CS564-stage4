@@ -479,17 +479,66 @@ const Status InsertFileScan::insertRecord(const Record & rec, RID& outRid)
         return INVALIDRECLEN;
     }
 
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
+    //(1)Make sure we have curr page pinned 
+	if (curPage == NULL) {
+        // No current page → read last page
+        curPageNo = headerPage->lastPage;
+        status = bufMgr->readPage(filePtr, curPageNo, curPage);
+        if (status != OK) return status;
+        curDirtyFlag = false;
+    }
+
+    //(2)Try inserting into the last page 
+    status = curPage->insertRecord(rec, outRid);
+    if (status == OK) {
+        curDirtyFlag = true;
+        // Update header page 
+        headerPage->recCnt++;
+        hdrDirtyFlag = true;
+        return OK;
+    }
+
+    //(3)Make new page if can't insert into last 
+    if (status != NOSPACE) return status;
+
+    // Unpin current page before replacing it
+    Status unpinStatus = bufMgr->unPinPage(filePtr, curPageNo, curDirtyFlag);
+    if (unpinStatus != OK) return unpinStatus;
+
+    // Make new page
+    status = bufMgr->allocPage(filePtr, newPageNo, newPage);
+    if (status != OK) return status;
+    newPage->init(newPageNo);
+
+    // change pointer to newly allocated page 
+    Page* oldLastPage;
+    status = bufMgr->readPage(filePtr, headerPage->lastPage, oldLastPage);
+    if (status != OK) return status;
+    oldLastPage->setNextPage(newPageNo);
+
+    // last page is dirty and unpin 
+    status = bufMgr->unPinPage(filePtr, headerPage->lastPage, true);
+    if (status != OK) return status;
+
+    // Update header page 
+    headerPage->lastPage = newPageNo;
+    headerPage->pageCnt++;
+    hdrDirtyFlag = true;
+
+    // Make new page the current page
+    curPage = newPage;
+    curPageNo = newPageNo;
+    curDirtyFlag = false;
+
+    //(4) insert record into the new page 
+    status = curPage->insertRecord(rec, outRid);
+    if (status != OK) return status;
+
+    curDirtyFlag = true;
+    headerPage->recCnt++;
+    hdrDirtyFlag = true;
+
+    return OK;
   
 }
 
